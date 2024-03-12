@@ -2,16 +2,56 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.transactionSenderAndConfirmationWaiter = exports.getSignature = void 0;
 const tslib_1 = require("tslib");
+const assert_1 = tslib_1.__importDefault(require("assert"));
 const bs58_1 = tslib_1.__importDefault(require("bs58"));
 const fs_1 = tslib_1.__importDefault(require("fs"));
 const node_fetch_1 = tslib_1.__importDefault(require("node-fetch"));
 const promise_retry_1 = tslib_1.__importDefault(require("promise-retry"));
 const yargs_1 = tslib_1.__importDefault(require("yargs"));
-const api_1 = require("@jup-ag/api");
+const raydium_sdk_1 = require("@raydium-io/raydium-sdk");
 const spl_token_1 = require("@solana/spl-token");
 const web3_js_1 = require("@solana/web3.js");
 const yellowstone_grpc_1 = tslib_1.__importStar(require("@triton-one/yellowstone-grpc"));
+const configy_1 = require("./configy");
+const formatAmmKeysById_1 = require("./formatAmmKeysById");
 const raydium_1 = require("./markets/raydium");
+const util_1 = require("./util");
+const markets = JSON.parse(fs_1.default.readFileSync('./src/markets/raydium/mainnet.json').toString())['unOfficial'];
+async function swapOnlyAmm(input) {
+    try {
+        // -------- pre-action: get pool info --------
+        const targetPoolInfo = await (0, formatAmmKeysById_1.formatAmmKeysById)(input.targetPool);
+        (0, assert_1.default)(targetPoolInfo, 'cannot find the target pool');
+        const poolKeys = (0, raydium_sdk_1.jsonInfo2PoolKeys)(targetPoolInfo);
+        // -------- step 1: coumpute amount out --------
+        const { amountOut, minAmountOut } = raydium_sdk_1.Liquidity.computeAmountOut({
+            poolKeys: poolKeys,
+            poolInfo: await raydium_sdk_1.Liquidity.fetchInfo({ connection, poolKeys }),
+            amountIn: input.inputTokenAmount,
+            currencyOut: input.outputToken,
+            slippage: input.slippage,
+        });
+        // -------- step 2: create instructions by SDK function --------
+        const { innerTransactions } = await raydium_sdk_1.Liquidity.makeSwapInstructionSimple({
+            connection,
+            poolKeys,
+            userKeys: {
+                tokenAccounts: input.walletTokenAccounts,
+                owner: input.wallet.publicKey,
+            },
+            amountIn: input.inputTokenAmount,
+            amountOut: minAmountOut,
+            fixedSide: 'in',
+            makeTxVersion: configy_1.makeTxVersion,
+        });
+        console.log('amountOut:', amountOut.toFixed(), '  minAmountOut: ', minAmountOut.toFixed());
+        return { txids: await (0, util_1.buildAndSendTx)(innerTransactions) };
+    }
+    catch (err) {
+        console.error(err);
+        return { txids: [] };
+    }
+}
 function getSignature(transaction) {
     const signature = "signature" in transaction
         ? transaction.signature
@@ -98,8 +138,7 @@ async function transactionSenderAndConfirmationWaiter({ connection, serializedTr
 }
 exports.transactionSenderAndConfirmationWaiter = transactionSenderAndConfirmationWaiter;
 const wait = (time) => new Promise((resolve) => setTimeout(resolve, time));
-const jupiterQuoteApi = (0, api_1.createJupiterApiClient)(); // config is optional
-const payer = web3_js_1.Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs_1.default.readFileSync("/Users/jd/7i.json").toString())));
+const payer = web3_js_1.Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs_1.default.readFileSync("/Users/jd/photon.json").toString())));
 const connection = new web3_js_1.Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/8d890735-edf2-4a75-af84-92f7c9e31718", 'confirmed');
 // A simple cache object to store prices; in a more complex application, consider using a more robust caching solution
 let priceCache = {};
@@ -218,7 +257,7 @@ async function subscribeCommand(client, args) {
             // Use the known token's price and the ratio of amount changes to infer the unknown token's price
             const knownTokenPrice = priceCache[knownTokenPre.mint];
             const inferredUnknownPrice = (knownTokenPrice * knownAmountChange) / unknownAmountChange;
-            if (!Object.keys(priceCache).includes(unknownTokenPre.mint)) {
+            if (!Object.keys(priceCache).includes(unknownTokenPre.mint) && (0, raydium_1.isTokenAccountOfInterest)(unknownTokenPre.mint)) {
                 console.log(`Inferred price for ${unknownTokenPre.mint}: $${inferredUnknownPrice.toFixed(6)} (based on ${knownTokenPre.mint})`);
                 console.log('Inferred volume in $USD for', unknownTokenPre.mint, 'is', (inferredUnknownPrice * unknownAmountChange).toFixed(6));
                 const plainOldTokens = await connection.getParsedTokenAccountsByOwner(payer.publicKey, { programId: spl_token_1.TOKEN_PROGRAM_ID });
@@ -227,115 +266,53 @@ async function subscribeCommand(client, args) {
                 const token = tokens.find(t => t.account.data.parsed.info.mint === unknownTokenPre.mint);
                 console.log(buyOrSell);
                 if (buyOrSell === 'buy') {
-                    const usdc = tokens.find(t => t.account.data.parsed.info.mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-                    const usdcBalance = Math.floor(Number(usdc.account.data.parsed.info.tokenAmount.amount) / 1000);
-                    const quote = await jupiterQuoteApi.quoteGet({
-                        inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                        outputMint: unknownTokenPre.mint,
-                        amount: usdcBalance,
-                        maxAccounts: 52,
-                        slippageBps: 1000
-                    });
-                    console.log(quote);
-                    // Get serialized transaction
-                    const swapResult = await jupiterQuoteApi.swapPost({
-                        swapRequest: {
-                            quoteResponse: quote,
-                            userPublicKey: payer.publicKey.toBase58(),
-                            dynamicComputeUnitLimit: true,
-                            prioritizationFeeLamports: "auto",
-                            // prioritizationFeeLamports: {
-                            //   autoMultiplier: 2,
-                            // },
-                        },
-                    });
-                    console.dir(swapResult, { depth: null });
-                    // Serialize the transaction
-                    const swapTransactionBuf = Buffer.from(swapResult.swapTransaction, "base64");
-                    var transaction = web3_js_1.VersionedTransaction.deserialize(swapTransactionBuf);
-                    // Sign the transaction
-                    transaction.sign([payer]);
-                    const signature = getSignature(transaction);
-                    console.log("Signature:", signature);
-                    // We first simulate whether the transaction would be successful
-                    const { value: simulatedTransactionResponse } = await connection.simulateTransaction(transaction, {
-                        replaceRecentBlockhash: true,
-                        commitment: "processed",
-                    });
-                    const { err, logs } = simulatedTransactionResponse;
-                    if (err) {
-                        // Simulation error, we can check the logs for more details
-                        // If you are getting an invalid account error, make sure that you have the input mint account to actually swap from.
-                        console.error("Simulation Error:");
-                        console.error({ err, logs });
-                        return;
+                    // const usdc = tokens.find(t => t.account.data.parsed.info.mint === "So11111111111111111111111111111111111111112")
+                    const usdcBalance = Math.floor(Number(await connection.getBalance(payer.publicKey)) / 100);
+                    const inputToken = new raydium_sdk_1.Token(spl_token_1.TOKEN_PROGRAM_ID, spl_token_1.NATIVE_MINT, 9, 'SOL', 'SOL');
+                    const outputTokenAccountInfo = await connection.getParsedAccountInfo(new web3_js_1.PublicKey(unknownTokenPre.mint));
+                    // @ts-ignore
+                    const outputToken = new raydium_sdk_1.Token(outputTokenAccountInfo.value.owner, new web3_js_1.PublicKey(unknownTokenPre.mint), outputTokenAccountInfo.value.data.parsed.info.decimals, outputTokenAccountInfo.value.data.parsed.info.symbol, outputTokenAccountInfo.value.data.parsed.info.symbol);
+                    const targetPool = markets.find(m => m.quoteMint === "So11111111111111111111111111111111111111112" && m.baseMint === unknownTokenPre.mint);
+                    if (targetPool != undefined) {
+                        const inputTokenAmount = new raydium_sdk_1.TokenAmount(inputToken, usdcBalance);
+                        const slippage = new raydium_sdk_1.Percent(1, 100);
+                        const walletTokenAccounts = await (0, util_1.getWalletTokenAccount)(connection, payer.publicKey);
+                        swapOnlyAmm({
+                            outputToken,
+                            targetPool: targetPool.id,
+                            inputTokenAmount,
+                            slippage,
+                            walletTokenAccounts,
+                            wallet: payer,
+                        }).then(({ txids }) => {
+                            /** continue with txids */
+                            console.log('txids', txids);
+                        });
                     }
-                    const serializedTransaction = Buffer.from(transaction.serialize());
-                    const blockhash = transaction.message.recentBlockhash;
-                    const transactionResponse = await transactionSenderAndConfirmationWaiter({
-                        connection,
-                        serializedTransaction,
-                        blockhashWithExpiryBlockHeight: {
-                            blockhash,
-                            lastValidBlockHeight: swapResult.lastValidBlockHeight,
-                        },
-                    });
-                    console.log("Transaction Response:", transactionResponse);
                 }
-                else if (buyOrSell === 'sell' && token !== undefined) {
-                    const tokenBalance = (Number(token.account.data.parsed.info.tokenAmount.amount) / 100);
-                    const quote = await jupiterQuoteApi.quoteGet({
-                        inputMint: unknownTokenPre.mint,
-                        outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                        amount: tokenBalance,
-                        maxAccounts: 52,
-                        slippageBps: 1000
-                    });
-                    console.log(quote);
-                    // Get serialized transaction
-                    const swapResult = await jupiterQuoteApi.swapPost({
-                        swapRequest: {
-                            quoteResponse: quote,
-                            userPublicKey: payer.publicKey.toBase58(),
-                            dynamicComputeUnitLimit: true,
-                            prioritizationFeeLamports: "auto",
-                            // prioritizationFeeLamports: {
-                            //   autoMultiplier: 2,
-                            // },
-                        },
-                    });
-                    console.dir(swapResult, { depth: null });
-                    // Serialize the transaction
-                    const swapTransactionBuf = Buffer.from(swapResult.swapTransaction, "base64");
-                    var transaction = web3_js_1.VersionedTransaction.deserialize(swapTransactionBuf);
-                    // Sign the transaction
-                    transaction.sign([payer]);
-                    const signature = getSignature(transaction);
-                    console.log("Signature:", signature);
-                    // We first simulate whether the transaction would be successful
-                    const { value: simulatedTransactionResponse } = await connection.simulateTransaction(transaction, {
-                        replaceRecentBlockhash: true,
-                        commitment: "processed",
-                    });
-                    const { err, logs } = simulatedTransactionResponse;
-                    if (err) {
-                        // Simulation error, we can check the logs for more details
-                        // If you are getting an invalid account error, make sure that you have the input mint account to actually swap from.
-                        console.error("Simulation Error:");
-                        console.error({ err, logs });
-                        return;
+                else if (buyOrSell === 'sell' && token != undefined) {
+                    const inputTokenAccountInfo = await connection.getParsedAccountInfo(new web3_js_1.PublicKey(unknownTokenPre.mint));
+                    const tokenBalance = Math.floor(Number(token.account.data.parsed.info.tokenAmount.amount) / 10);
+                    // @ts-ignore
+                    const inputToken = new raydium_sdk_1.Token(inputTokenAccountInfo.value.owner, new web3_js_1.PublicKey(unknownTokenPre.mint), inputTokenAccountInfo.value.data.parsed.info.decimals, inputTokenAccountInfo.value.data.parsed.info.symbol, inputTokenAccountInfo.value.data.parsed.info.symbol);
+                    const outputToken = new raydium_sdk_1.Token(spl_token_1.TOKEN_PROGRAM_ID, spl_token_1.NATIVE_MINT, 9, 'SOL', 'SOL');
+                    const targetPool = markets.find(m => m.quoteMint === "So11111111111111111111111111111111111111112" && m.baseMint === unknownTokenPre.mint);
+                    if (targetPool != undefined) {
+                        const inputTokenAmount = new raydium_sdk_1.TokenAmount(inputToken, tokenBalance);
+                        const slippage = new raydium_sdk_1.Percent(1, 100);
+                        const walletTokenAccounts = await (0, util_1.getWalletTokenAccount)(connection, payer.publicKey);
+                        swapOnlyAmm({
+                            outputToken,
+                            targetPool: targetPool.id,
+                            inputTokenAmount,
+                            slippage,
+                            walletTokenAccounts,
+                            wallet: payer,
+                        }).then(({ txids }) => {
+                            /** continue with txids */
+                            console.log('txids', txids);
+                        });
                     }
-                    const serializedTransaction = Buffer.from(transaction.serialize());
-                    const blockhash = transaction.message.recentBlockhash;
-                    const transactionResponse = await transactionSenderAndConfirmationWaiter({
-                        connection,
-                        serializedTransaction,
-                        blockhashWithExpiryBlockHeight: {
-                            blockhash,
-                            lastValidBlockHeight: swapResult.lastValidBlockHeight,
-                        },
-                    });
-                    console.log("Transaction Response:", transactionResponse);
                 }
                 // save an object for the inferred volume in $USD, along with cumulative volume for the last 1hr, as well as a timestamp
                 // discount any trade earlier than 1hr

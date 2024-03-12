@@ -1,11 +1,22 @@
+import assert from "assert";
 import bs58 from "bs58";
 import fs from "fs";
 import fetch from "node-fetch";
 import promiseRetry from "promise-retry";
 import yargs from "yargs";
 
-import { createJupiterApiClient } from "@jup-ag/api";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  jsonInfo2PoolKeys,
+  Liquidity,
+  LiquidityPoolKeys,
+  Percent,
+  Token,
+  TokenAmount,
+} from "@raydium-io/raydium-sdk";
+import {
+  NATIVE_MINT,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import {
   BlockhashWithExpiryBlockHeight,
   Connection,
@@ -22,7 +33,68 @@ import Client, {
   SubscribeRequestFilterAccountsFilter,
 } from "@triton-one/yellowstone-grpc";
 
-import { RaydiumDEX } from "./markets/raydium";
+import { makeTxVersion } from "./configy";
+import { formatAmmKeysById } from "./formatAmmKeysById";
+import {
+  isTokenAccountOfInterest,
+  RaydiumDEX,
+} from "./markets/raydium";
+import {
+  buildAndSendTx,
+  getWalletTokenAccount,
+} from "./util";
+
+const markets = JSON.parse(fs.readFileSync('./src/markets/raydium/mainnet.json').toString())['unOfficial']
+
+type WalletTokenAccounts = Awaited<ReturnType<typeof getWalletTokenAccount>>
+type TestTxInputInfo = {
+  outputToken: Token
+  targetPool: string
+  inputTokenAmount: TokenAmount
+  slippage: Percent
+  walletTokenAccounts: WalletTokenAccounts
+  wallet: Keypair
+}
+
+async function swapOnlyAmm(input: TestTxInputInfo) {
+  try {
+  // -------- pre-action: get pool info --------
+  const targetPoolInfo = await formatAmmKeysById(input.targetPool)
+  assert(targetPoolInfo, 'cannot find the target pool')
+  const poolKeys = jsonInfo2PoolKeys(targetPoolInfo) as LiquidityPoolKeys
+
+  // -------- step 1: coumpute amount out --------
+  const { amountOut, minAmountOut } = Liquidity.computeAmountOut({
+    poolKeys: poolKeys,
+    poolInfo: await Liquidity.fetchInfo({ connection, poolKeys }),
+    amountIn: input.inputTokenAmount,
+    currencyOut: input.outputToken,
+    slippage: input.slippage,
+  })
+
+  // -------- step 2: create instructions by SDK function --------
+  const { innerTransactions } = await Liquidity.makeSwapInstructionSimple({
+    connection,
+    poolKeys,
+    userKeys: {
+      tokenAccounts: input.walletTokenAccounts,
+      owner: input.wallet.publicKey,
+    },
+    amountIn: input.inputTokenAmount,
+    amountOut: minAmountOut,
+    fixedSide: 'in',
+    makeTxVersion,
+  })
+
+  console.log('amountOut:', amountOut.toFixed(), '  minAmountOut: ', minAmountOut.toFixed())
+
+  return { txids: await buildAndSendTx(innerTransactions) }
+}
+catch (err){
+  console.error(err)
+  return {txids: []}
+}
+}
 
 export function getSignature(
   transaction: Transaction | VersionedTransaction
@@ -141,18 +213,15 @@ export async function transactionSenderAndConfirmationWaiter({
 
  const wait = (time: number) =>
   new Promise((resolve) => setTimeout(resolve, time));
-const jupiterQuoteApi = createJupiterApiClient({
-  basePath: 'http://localhost:8080'
-})
 
 const payer = Keypair.fromSecretKey(
   new Uint8Array(
     JSON.parse(
-      fs.readFileSync("/Users/jd/7i.json").toString()
+      fs.readFileSync("/Users/jd/photon.json").toString()
     )
   )
 );
-const connection = new Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/", 'confirmed');
+const connection = new Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/8d890735-edf2-4a75-af84-92f7c9e31718", 'confirmed');
 // A simple cache object to store prices; in a more complex application, consider using a more robust caching solution
 let priceCache = {};
 
@@ -293,7 +362,7 @@ async function inferUnknownTokenPrice(preBalances: any[], postBalances: any[]): 
   // Use the known token's price and the ratio of amount changes to infer the unknown token's price
   const knownTokenPrice = priceCache[knownTokenPre.mint];
   const inferredUnknownPrice = (knownTokenPrice * knownAmountChange) / unknownAmountChange;
-  if (!Object.keys(priceCache).includes(unknownTokenPre.mint)){
+  if (!Object.keys(priceCache).includes(unknownTokenPre.mint) && isTokenAccountOfInterest(unknownTokenPre.mint)){
   console.log(`Inferred price for ${unknownTokenPre.mint}: $${inferredUnknownPrice.toFixed(6)} (based on ${knownTokenPre.mint})`);
   console.log('Inferred volume in $USD for', unknownTokenPre.mint, 'is', (inferredUnknownPrice * unknownAmountChange).toFixed(6))
   const plainOldTokens = await connection.getParsedTokenAccountsByOwner(payer.publicKey, {programId: TOKEN_PROGRAM_ID})
@@ -302,133 +371,59 @@ async function inferUnknownTokenPrice(preBalances: any[], postBalances: any[]): 
   const token = tokens.find(t => t.account.data.parsed.info.mint === unknownTokenPre.mint)
   console.log(buyOrSell)
   if (buyOrSell === 'buy'){
-    const usdc = tokens.find(t => t.account.data.parsed.info.mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-    const usdcBalance = Math.floor(Number(usdc.account.data.parsed.info.tokenAmount.amount) / 1000)
-    const quote = await jupiterQuoteApi.quoteGet({
-      inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      outputMint: unknownTokenPre.mint,
-      amount: usdcBalance,
-      maxAccounts: 52,
-      slippageBps: 1000
-    })
-    console.log(quote)
-      // Get serialized transaction
-    const swapResult = await jupiterQuoteApi.swapPost({
-      swapRequest: {
-        quoteResponse: quote,
-        userPublicKey: payer.publicKey.toBase58(),
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: "auto",
-        // prioritizationFeeLamports: {
-        //   autoMultiplier: 2,
-        // },
-      },
-    });
+   // const usdc = tokens.find(t => t.account.data.parsed.info.mint === "So11111111111111111111111111111111111111112")
+    const usdcBalance = Math.floor(Number(await connection.getBalance(payer.publicKey)) / 100)
+    
+    const inputToken = new Token(TOKEN_PROGRAM_ID, NATIVE_MINT, 9, 'SOL', 'SOL')
+    const outputTokenAccountInfo = await connection.getParsedAccountInfo(new PublicKey(unknownTokenPre.mint))
+    // @ts-ignore
+    const outputToken = new Token(outputTokenAccountInfo.value.owner, new PublicKey(unknownTokenPre.mint), outputTokenAccountInfo.value.data.parsed.info.decimals, outputTokenAccountInfo.value.data.parsed.info.symbol, outputTokenAccountInfo.value.data.parsed.info.symbol)
+    const targetPool = markets.find(m => m.quoteMint === "So11111111111111111111111111111111111111112" && m.baseMint === unknownTokenPre.mint)
+    if (targetPool != undefined){
 
-    console.dir(swapResult, { depth: null });
 
-    // Serialize the transaction
-    const swapTransactionBuf = Buffer.from(swapResult.swapTransaction, "base64");
-    var transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-
-    // Sign the transaction
-    transaction.sign([payer]);
-    const signature = getSignature(transaction);
-    console.log("Signature:", signature);
-    // We first simulate whether the transaction would be successful
-    const { value: simulatedTransactionResponse } =
-      await connection.simulateTransaction(transaction, {
-        replaceRecentBlockhash: true,
-        commitment: "processed",
-      });
-    const { err, logs } = simulatedTransactionResponse;
-
-    if (err) {
-      // Simulation error, we can check the logs for more details
-      // If you are getting an invalid account error, make sure that you have the input mint account to actually swap from.
-      console.error("Simulation Error:");
-      console.error({ err, logs });
-      return;
-    }
-
-    const serializedTransaction = Buffer.from(transaction.serialize());
-    const blockhash = transaction.message.recentBlockhash;
-
-    const transactionResponse = await transactionSenderAndConfirmationWaiter({
-      connection,
-      serializedTransaction,
-      blockhashWithExpiryBlockHeight: {
-        blockhash,
-        lastValidBlockHeight: swapResult.lastValidBlockHeight,
-      },
-    });
-    console.log("Transaction Response:", transactionResponse);
+    const inputTokenAmount = new TokenAmount(inputToken, usdcBalance)
+    const slippage = new Percent(1, 100)
+    const walletTokenAccounts = await getWalletTokenAccount(connection, payer.publicKey)
   
-  }
-  else if (buyOrSell === 'sell' && token !== undefined){
-    const tokenBalance = (Number(token.account.data.parsed.info.tokenAmount.amount) / 100)
-    const quote = await jupiterQuoteApi.quoteGet({
-      inputMint: unknownTokenPre.mint,
-      outputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      amount: tokenBalance,
-      maxAccounts: 52,
-      slippageBps: 1000
+    swapOnlyAmm({
+      outputToken,
+      targetPool: targetPool.id,
+      inputTokenAmount,
+      slippage,
+      walletTokenAccounts,
+      wallet: payer,
+    }).then(({ txids }) => {
+      /** continue with txids */
+      console.log('txids', txids)
     })
-    console.log(quote)
-      // Get serialized transaction
-    const swapResult = await jupiterQuoteApi.swapPost({
-      swapRequest: {
-        quoteResponse: quote,
-        userPublicKey: payer.publicKey.toBase58(),
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: "auto",
-        // prioritizationFeeLamports: {
-        //   autoMultiplier: 2,
-        // },
-      },
-    });
-
-    console.dir(swapResult, { depth: null });
-
-    // Serialize the transaction
-    const swapTransactionBuf = Buffer.from(swapResult.swapTransaction, "base64");
-    var transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-
-    // Sign the transaction
-    transaction.sign([payer]);
-    const signature = getSignature(transaction);
-    console.log("Signature:", signature);
-
-    // We first simulate whether the transaction would be successful
-    const { value: simulatedTransactionResponse } =
-      await connection.simulateTransaction(transaction, {
-        replaceRecentBlockhash: true,
-        commitment: "processed",
-      });
-    const { err, logs } = simulatedTransactionResponse;
-
-    if (err) {
-      // Simulation error, we can check the logs for more details
-      // If you are getting an invalid account error, make sure that you have the input mint account to actually swap from.
-      console.error("Simulation Error:");
-      console.error({ err, logs });
-      return;
     }
+  }
+   else if (buyOrSell === 'sell' && token != undefined){
+    const inputTokenAccountInfo = await connection.getParsedAccountInfo(new PublicKey(unknownTokenPre.mint))
+    const tokenBalance = Math.floor(Number(token.account.data.parsed.info.tokenAmount.amount) / 10)
 
-    const serializedTransaction = Buffer.from(transaction.serialize());
-    const blockhash = transaction.message.recentBlockhash;
-
-    const transactionResponse = await transactionSenderAndConfirmationWaiter({
-      connection,
-      serializedTransaction,
-      blockhashWithExpiryBlockHeight: {
-        blockhash,
-        lastValidBlockHeight: swapResult.lastValidBlockHeight,
-      },
-    });
-    console.log("Transaction Response:", transactionResponse);
-
-
+    // @ts-ignore
+    const inputToken = new Token(inputTokenAccountInfo.value.owner, new PublicKey(unknownTokenPre.mint), inputTokenAccountInfo.value.data.parsed.info.decimals, inputTokenAccountInfo.value.data.parsed.info.symbol, inputTokenAccountInfo.value.data.parsed.info.symbol)
+    const outputToken = new Token(TOKEN_PROGRAM_ID, NATIVE_MINT, 9, 'SOL', 'SOL')
+    const targetPool = markets.find(m => m.quoteMint === "So11111111111111111111111111111111111111112" && m.baseMint === unknownTokenPre.mint)
+    if (targetPool != undefined){
+    const inputTokenAmount = new TokenAmount(inputToken, tokenBalance)
+    const slippage = new Percent(1, 100)
+    const walletTokenAccounts = await getWalletTokenAccount(connection, payer.publicKey)
+  
+    swapOnlyAmm({
+      outputToken,
+      targetPool: targetPool.id,
+      inputTokenAmount,
+      slippage,
+      walletTokenAccounts,
+      wallet: payer,
+    }).then(({ txids }) => {
+      /** continue with txids */
+      console.log('txids', txids)
+    })
+  }
   }
   // save an object for the inferred volume in $USD, along with cumulative volume for the last 1hr, as well as a timestamp
   // discount any trade earlier than 1hr

@@ -7,7 +7,7 @@ const raydium_sdk_1 = require("@raydium-io/raydium-sdk");
 const T2 = tslib_1.__importStar(require("@solana/spl-token"));
 const spl_token_1 = require("@solana/spl-token");
 const web3_js_1 = require("@solana/web3.js");
-const wallet = web3_js_1.Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs_1.default.readFileSync('/home/stacc/7i.json', 'utf-8').toString())));
+const wallet = web3_js_1.Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs_1.default.readFileSync('/home/stacc/photon.json', 'utf-8').toString())));
 const connection = new web3_js_1.Connection("http://202.8.8.185:8899", "finalized");
 async function main() {
     const goodCache = JSON.parse(fs_1.default.readFileSync('/home/stacc/goodCache.json', 'utf-8').toString());

@@ -25,7 +25,7 @@ import {
 
 const wallet = Keypair.fromSecretKey(
     new Uint8Array(
-        JSON.parse(fs.readFileSync('/home/stacc/7i.json', 'utf-8').toString())  
+        JSON.parse(fs.readFileSync('/home/stacc/photon.json', 'utf-8').toString())  
     )
 )
 const connection = new Connection("http://202.8.8.185:8899", "finalized")
