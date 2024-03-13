@@ -139,7 +139,7 @@ async function transactionSenderAndConfirmationWaiter({ connection, serializedTr
 exports.transactionSenderAndConfirmationWaiter = transactionSenderAndConfirmationWaiter;
 const wait = (time) => new Promise((resolve) => setTimeout(resolve, time));
 const payer = web3_js_1.Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs_1.default.readFileSync("/Users/jd/photon.json").toString())));
-const connection = new web3_js_1.Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/8d890735-edf2-4a75-af84-92f7c9e31718", 'confirmed');
+const connection = new web3_js_1.Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/xxxxxxxx", 'confirmed');
 // A simple cache object to store prices; in a more complex application, consider using a more robust caching solution
 let priceCache = {};
 async function fetchPrice(tokenId) {

@@ -1,9 +1,9 @@
-import assert from "assert";
-import bs58 from "bs58";
-import fs from "fs";
-import fetch from "node-fetch";
-import promiseRetry from "promise-retry";
-import yargs from "yargs";
+import assert from 'assert';
+import bs58 from 'bs58';
+import fs from 'fs';
+import fetch from 'node-fetch';
+import promiseRetry from 'promise-retry';
+import yargs from 'yargs';
 
 import {
   jsonInfo2PoolKeys,
@@ -12,11 +12,11 @@ import {
   Percent,
   Token,
   TokenAmount,
-} from "@raydium-io/raydium-sdk";
+} from '@raydium-io/raydium-sdk';
 import {
   NATIVE_MINT,
   TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+} from '@solana/spl-token';
 import {
   BlockhashWithExpiryBlockHeight,
   Connection,
@@ -26,23 +26,23 @@ import {
   TransactionExpiredBlockheightExceededError,
   VersionedTransaction,
   VersionedTransactionResponse,
-} from "@solana/web3.js";
+} from '@solana/web3.js';
 import Client, {
   CommitmentLevel,
   SubscribeRequest,
   SubscribeRequestFilterAccountsFilter,
-} from "@triton-one/yellowstone-grpc";
+} from '@triton-one/yellowstone-grpc';
 
-import { makeTxVersion } from "./configy";
-import { formatAmmKeysById } from "./formatAmmKeysById";
+import { makeTxVersion } from './configy';
+import { formatAmmKeysById } from './formatAmmKeysById';
 import {
   isTokenAccountOfInterest,
   RaydiumDEX,
-} from "./markets/raydium";
+} from './markets/raydium';
 import {
   buildAndSendTx,
   getWalletTokenAccount,
-} from "./util";
+} from './util';
 
 const markets = JSON.parse(fs.readFileSync('./src/markets/raydium/mainnet.json').toString())['unOfficial']
 
@@ -221,7 +221,7 @@ const payer = Keypair.fromSecretKey(
     )
   )
 );
-const connection = new Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/8d890735-edf2-4a75-af84-92f7c9e31718", 'confirmed');
+const connection = new Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/xxxxxxxx", 'confirmed');
 // A simple cache object to store prices; in a more complex application, consider using a more robust caching solution
 let priceCache = {};
 

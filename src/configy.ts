@@ -1,4 +1,4 @@
-import fs from "fs";
+import fs from 'fs';
 
 import {
   Currency,
@@ -9,14 +9,14 @@ import {
   Token,
   TOKEN_PROGRAM_ID,
   TxVersion,
-} from "@raydium-io/raydium-sdk";
+} from '@raydium-io/raydium-sdk';
 import {
   Connection,
   Keypair,
   PublicKey,
-} from "@solana/web3.js";
+} from '@solana/web3.js';
 
-export const rpcUrl: string = "https://jarrett-solana-7ba9.mainnet.rpcpool.com/8d890735-edf2-4a75-af84-92f7c9e31718"
+export const rpcUrl: string = "https://jarrett-solana-7ba9.mainnet.rpcpool.com/xxxxxxxx"
 export const rpcToken: string | undefined = undefined
 
 export const wallet = Keypair.fromSecretKey(
@@ -27,7 +27,7 @@ export const wallet = Keypair.fromSecretKey(
   )
 );
 
-export const connection = new Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/8d890735-edf2-4a75-af84-92f7c9e31718");
+export const connection = new Connection("https://jarrett-solana-7ba9.mainnet.rpcpool.com/xxxxxxxx");
 
 export const PROGRAMIDS = MAINNET_PROGRAM_ID;
 
