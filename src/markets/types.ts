@@ -1,7 +1,10 @@
-import { AccountInfo, PublicKey } from '@solana/web3.js';
-import { toPairString } from './utils.js';
-import { SwapLegType } from '@jup-ag/core/dist/lib/jupiterEnums.js';
+import { SwapLegType } from "@jup-ag/core/dist/lib/jupiterEnums.js";
+import {
+  AccountInfo,
+  PublicKey,
+} from "@solana/web3.js";
 
+import { toPairString } from "./utils.js";
 
 export enum DexLabel {
   ORCA = 'Orca',
@@ -20,7 +23,7 @@ export type Market = {
 };
 
 export abstract class DEX {
-  pairToMarkets: Map<string, Market[]>;
+  public pairToMarkets: Map<string, Market[]>;
   ammCalcAddPoolMessages: AmmCalcWorkerParamMessage[];
   label: DexLabel;
 

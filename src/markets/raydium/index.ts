@@ -1,7 +1,16 @@
-import { ApiPoolInfoItem } from '@raydium-io/raydium-sdk';
-import { PublicKey } from '@solana/web3.js';
-import { DEX, Market, DexLabel } from '../types.js';
-import { toPairString } from '../utils.js';
+// @ts-ignore
+import fs from "fs";
+
+import { ApiPoolInfoItem } from "@raydium-io/raydium-sdk";
+import { PublicKey } from "@solana/web3.js";
+
+import {
+  DEX,
+  DexLabel,
+  Market,
+} from "../types.js";
+import { toPairString } from "../utils.js";
+
 // something is wrong with the accounts of these markets
 const MARKETS_TO_IGNORE = [
   '9DTY3rv8xRa3CnoPoWJCMcQUSY7kUHZAoFKNsBhx8DDz',
@@ -9,8 +18,7 @@ const MARKETS_TO_IGNORE = [
   '9f4FtV6ikxUZr8fAjKSGNPPnUHJEwi4jNk8d79twbyFf',
   '5NBtQe4GPZTRiwrmkwPxNdAuiVFGjQWnihVSqML6ADKT', // pool not tradeable
 ];
-// @ts-ignore
-import fs from 'fs'
+
 export const POOLS_JSON = JSON.parse(
   fs.readFileSync('./src/markets/raydium/mainnet.json', 'utf-8'),
 ) as { official: ApiPoolInfoItem[]; unOfficial: ApiPoolInfoItem[] };
@@ -50,8 +58,8 @@ class RaydiumDEX extends DEX {
         dexLabel: this.label,
         id: pool.id,
       };
-      tokenAccountsOfInterest.add(pool.baseVault);
-      tokenAccountsOfInterest.add(pool.quoteVault);
+      tokenAccountsOfInterest.add(pool.baseMint);
+      tokenAccountsOfInterest.add(pool.quoteMint);
 
       const pairString = toPairString(pool.baseMint, pool.quoteMint);
       if (this.pairToMarkets.has(pairString)) {
